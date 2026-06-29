@@ -1,0 +1,48 @@
+matrix:
+  homeserver: "https://matrix.org"
+  # Either provide username+password (bot will obtain and store access token on first run)
+  # or provide access_token directly (preferred for production).
+  username: "@mensa-bot:matrix.org"
+  password: "changeme"
+  # access_token: "syt_..."   # uncomment to use token auth instead
+  device_name: "MensaBot"
+  room_id: "!roomid:matrix.org"
+  # Path for the matrix-nio E2EE store (device keys, session data)
+  store_path: "/data/nio_store"
+
+bot:
+  command_prefix: "!mensa"
+  # Maximum number of mensas for native Matrix poll (permutation-based).
+  # 3 mensas → 6 permutations; 4 mensas → 24 permutations (exceeds Matrix poll limit of 20).
+  max_poll_mensas: 3
+  vote_duration_minutes: 20
+  cache_duration_minutes: 30
+  # Default voting method: "borda" (Borda count) or "irv" (Instant-Runoff-Voting).
+  # Can be overridden per vote with !mensa votieren borda / !mensa votieren irv.
+  voting_method: "borda"
+  timezone: "Europe/Berlin"
+  db_path: "/data/mensa_bot.db"
+  log_level: "INFO"
+
+meal_times:
+  # Format: "HH:MM"
+  # Before lunch_start → show next day's lunch (or today's if before lunch_end)
+  lunch_start: "11:00"
+  lunch_end: "14:30"
+  zwischenversorgung_start: "14:30"
+  zwischenversorgung_end: "17:00"
+  abendessen_start: "17:00"
+  abendessen_end: "21:00"
+
+mensas:
+  - name: "Philosophenweg"
+    url: "https://www.stw-thueringen.de/mensen/jena/mensa-philosophenweg.html"
+    short_name: "Philweg"
+
+  - name: "Universitätshauptgebäude"
+    url: "https://www.stw-thueringen.de/mensen/jena/mensa-uni-hauptgebaeude.html"
+    short_name: "UHG"
+
+  - name: "Ernst-Abbe-Platz"
+    url: "https://www.stw-thueringen.de/mensen/jena/mensa-ernst-abbe-platz.html"
+    short_name: "EAP"

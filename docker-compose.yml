@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  mensa-bot:
+    build: .
+    container_name: mensa-element-bot
+    restart: unless-stopped
+    volumes:
+      - ./bot-data:/data
+    environment:
+      - MENSA_BOT_CONFIG=/data/config.yaml
+      - TZ=Europe/Berlin
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
