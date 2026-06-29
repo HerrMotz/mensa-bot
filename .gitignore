@@ -1,2 +1,4 @@
-.bot-data
+bot-data
 config.yaml
+**/__pycache__
+*.pyc

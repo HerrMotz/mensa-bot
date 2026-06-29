@@ -1,6 +1,6 @@
 # MensaBot – Element/Matrix Bot für Studierendenwerk Thüringen
 
-Ein deutschsprachiger Matrix-Bot für den Mensaplan der Jenaer Mensen. Zeigt Speisepläne an und leitet Abstimmungen (Instant-Runoff-Voting) durch.
+Ein deutschsprachiger Matrix-Bot für den Mensaplan der Jenaer Mensen. Zeigt Speisepläne an und leitet Abstimmungen durch (Approval-Voting, Borda-Zählung oder Instant-Runoff-Voting).
 
 ---
 
@@ -9,8 +9,8 @@ Ein deutschsprachiger Matrix-Bot für den Mensaplan der Jenaer Mensen. Zeigt Spe
 - **Speiseplan**: Ruft Mittagessen, Zwischenversorgung und Abendessen von stw-thueringen.de ab.
 - **Automatische Zeitauswahl**: Zeigt je nach Uhrzeit das passende Angebot.
 - **Preise**: Zeigt Preise für Studierende und Bedienstete (keine Gästepreise).
-- **Abstimmung**: Native Matrix-Umfrage mit allen Reihenfolge-Permutationen (3 Mensen → 6 Optionen).
-- **Instant-Runoff-Voting**: Ausgewertetes Ergebnis mit Rundenübersicht und Gleichstandsauflösung.
+- **Abstimmung**: Native Matrix-Umfrage — bei Approval-Voting jede Mensa als eigene Option (Mehrfachauswahl), bei Borda/IRV alle Reihenfolge-Permutationen.
+- **Drei Abstimmungsmethoden**: Approval-Voting (Standard), Borda-Zählung, Instant-Runoff-Voting — alle mit dokumentierter Gleichstandsauflösung.
 - **E2EE-Unterstützung**: Funktioniert in verschlüsselten Element-Räumen.
 - **Persistenz**: SQLite-Datenbank; Bot erholt sich nach Neustart.
 
@@ -20,13 +20,19 @@ Ein deutschsprachiger Matrix-Bot für den Mensaplan der Jenaer Mensen. Zeigt Spe
 
 | Befehl | Beschreibung |
 |---|---|
-| `!mensa` | Aktuell relevante Speisen |
+| `!mensa` oder `!m` | Aktuell relevante Speisen |
 | `!mensa heute` | Heutiges Mittagessen |
-| `!mensa votieren` | Abstimmung starten |
-| `!mensa wahl 2,1,3` | Stimme abgeben (Kommandomodus) |
+| `!mensa start` | Abstimmung starten (Standard-Methode aus Konfiguration) |
+| `!mensa start approval` | Abstimmung per Approval-Voting |
+| `!mensa start borda` | Abstimmung per Borda-Zählung |
+| `!mensa start irv` | Abstimmung per Instant-Runoff-Voting |
+| `!mensa votieren 1,3` | Stimme abgeben (Zahlen = akzeptable Mensen bei Approval, Reihenfolge bei Borda/IRV) |
 | `!mensa ergebnis` | Aktuelles Abstimmungsergebnis |
 | `!mensa schließen` | Abstimmung manuell beenden |
+| `!mensa schluss` | Abstimmung manuell beenden (Kurzform) |
 | `!mensa hilfe` | Hilfemeldung |
+
+> `!m` ist für alle Befehle gültig, z. B. `!m start`, `!m votieren 1,2`, `!m ergebnis`.
 
 ---
 
@@ -100,6 +106,15 @@ docker compose logs -f
 
 ---
 
+## Tägliche Mensanachricht
+
+Mit `daily_message_enabled: true` sendet der Bot automatisch den Mittagsspeiseplan zur konfigurierten Uhrzeit (Standard: 10:30 Uhr) — aber nur an Werktagen und ohne Thüringer Feiertage.
+
+**Berücksichtigte Feiertage (Thüringen):**
+Neujahr, Karfreitag, Ostermontag, Tag der Arbeit, Christi Himmelfahrt, Pfingstmontag, Weltkindertag (ab 2019), Tag der deutschen Einheit, Reformationstag, 1. und 2. Weihnachtstag.
+
+---
+
 ## Konfiguration (`config.yaml`)
 
 | Schlüssel | Pflicht | Standard | Beschreibung |
@@ -111,9 +126,12 @@ docker compose logs -f
 | `matrix.room_id` | ✓ | – | Ziel-Raum-ID |
 | `matrix.store_path` | – | `/data/nio_store` | Pfad für E2EE-Schlüsselspeicher |
 | `bot.command_prefix` | – | `!mensa` | Befehlspräfix |
-| `bot.max_poll_mensas` | – | `3` | Ab wann Kommandomodus statt Poll |
+| `bot.max_poll_mensas` | – | `3` | Ab wann Kommandomodus statt Poll (nur Borda/IRV) |
 | `bot.vote_duration_minutes` | – | `20` | Abstimmungsdauer |
 | `bot.cache_duration_minutes` | – | `30` | Cache-Gültigkeit |
+| `bot.voting_method` | – | `approval` | Standard-Abstimmungsmethode: `approval`, `borda` oder `irv` |
+| `bot.daily_message_enabled` | – | `false` | Tägliche Mensanachricht aktivieren |
+| `bot.daily_message_time` | – | `10:30` | Uhrzeit für die tägliche Nachricht (Format `HH:MM`) |
 | `bot.timezone` | – | `Europe/Berlin` | Zeitzone |
 | `meal_times.*` | – | siehe Beispiel | Mahlzeiten-Zeitfenster |
 | `mensas[].name` | ✓ | – | Mensaname |
@@ -126,13 +144,31 @@ docker compose logs -f
 
 ## Abstimmungsdesign
 
-### Nativer Matrix-Poll (≤ 3 Mensen)
+### Approval-Voting (Standard)
 
-Für drei Mensen gibt es 3! = 6 Reihenfolge-Permutationen — alle passen in einen nativen Matrix-Poll (max. 20 Optionen). Nutzer wählen ihre bevorzugte Reihenfolge. Der Bot liest die Abstimmung aus und wendet IRV an.
+Jede Person markiert alle Mensen, die sie für akzeptabel hält — eine oder mehrere. Die Mensa mit den meisten Zustimmungen gewinnt.
 
-**Wichtig:** Bei 4 Mensen entstehen 4! = 24 Permutationen, was den Matrix-Poll-Limit (20 Optionen) überschreitet. Ab 4 Mensen wechselt der Bot daher automatisch in den **Kommandomodus** (`!mensa wahl 2,1,3`).
+**Native Poll (≤ 20 Mensen):** Jede Mensa erscheint als eigene Option, Mehrfachauswahl ist aktiviert. Kein Permutationsproblem — auch bei vielen Mensen bleibt der native Poll verwendbar.
+
+**Kommandomodus (> 20 Mensen):** `!mensa wahl 1,3` bedeutet „Mensa 1 und Mensa 3 sind für mich akzeptabel."
+
+**Gleichstandsauflösung:** Konfigurierte Mensa-Reihenfolge (erste gewinnt). Gleichstände werden immer ausgewiesen.
+
+### Borda-Zählung
+
+Jede Person bringt alle Mensen in eine Reihenfolge. Bei N Mensen erhält der erstgereihte Kandidat N−1 Punkte, der zweite N−2 usw. Wer die meisten Punkte sammelt, gewinnt.
+
+**Native Poll (≤ 3 Mensen standardmäßig):** Alle Reihenfolge-Permutationen werden als Poll-Optionen angezeigt. Bei 3 Mensen: 3! = 6 Optionen. **Ab 4 Mensen:** 4! = 24 Permutationen überschreiten das Matrix-Poll-Limit (20 Optionen) → automatischer Wechsel in den Kommandomodus.
+
+**Kommandomodus:** `!mensa wahl 2,1,3` bedeutet „Mensa 2 > Mensa 1 > Mensa 3 (alle müssen angegeben werden)."
+
+**Gleichstandsauflösung:**
+1. Besserer Durchschnittsrang
+2. Konfigurierte Mensa-Reihenfolge
 
 ### Instant-Runoff-Voting (IRV)
+
+Wie Borda — jede Person bringt alle Mensen in eine Reihenfolge. Auswertung in Runden:
 
 1. Jede Stimme beginnt bei der erstgereihten Mensa.
 2. Wer > 50 % der aktiven Stimmen hat, gewinnt.
@@ -140,11 +176,12 @@ Für drei Mensen gibt es 3! = 6 Reihenfolge-Permutationen — alle passen in ein
 4. Deren Stimmen wandern zur nächsten aktiven Mensa auf dem jeweiligen Stimmzettel.
 5. Wiederholung bis Gewinner gefunden.
 
-**Gleichstandsauflösung:**
+**Gleichstandsauflösung (Elimination):**
 1. Meiste Erststimmen in Runde 1
 2. Bester Gesamt-Rangwert (kleiner = besser)
 3. Konfigurierte Mensa-Reihenfolge
-4. Gleichstand wird immer im Ergebnis ausgewiesen.
+
+Gleichstände werden immer im Ergebnis ausgewiesen.
 
 ---
 
@@ -167,4 +204,5 @@ pytest
 
 - **Datenbasis:** Der Bot scrapt stw-thueringen.de. Layoutänderungen können den Parser beeinträchtigen — die Fallback-Logik gibt dann leere Ergebnisse zurück statt abzustürzen.
 - **OpenMensa:** Die Thüringen-Parser auf OpenMensa sind inaktiv (leere Antworten). Sobald sie wieder gepflegt werden, kann der Fetcher auf die OpenMensa-API umgestellt werden (Schnittstelle dafür ist bereits vorbereitet).
-- **E2EE-Geräteverifikation:** Der Bot markiert unverifizierten Geräten als vertrauenswürdig (`ignore_unverified_devices=True`). Für höchste Sicherheitsanforderungen kann dies angepasst werden.
+- **E2EE-Geräteverifikation:** Der Bot markiert unverifizierte Geräte als vertrauenswürdig (`ignore_unverified_devices=True`). Für höchste Sicherheitsanforderungen kann dies angepasst werden.
+- **Approval-Voting im nativen Poll:** Die Mehrfachauswahl im nativen Matrix-Poll nutzt den MSC3381-Standard. Die Verarbeitung mehrerer Antworten wurde durch Code-Analyse und Tests verifiziert; ein Live-Test gegen einen echten Homeserver ist im lokalen Entwicklungssetup nicht möglich.

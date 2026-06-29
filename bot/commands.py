@@ -16,9 +16,9 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ParsedCommand:
-    subcommand: str           # "mensa", "heute", "mittag", "zwischen", "abend", "votieren", "wahl", "ergebnis", "schließen", "hilfe"
+    subcommand: str           # "mensa", "heute", "mittag", "zwischen", "abend", "start", "votieren", "ergebnis", "schliessen", "hilfe"
     raw_args: str             # everything after the subcommand
-    ranking_indices: Optional[list[int]] = None  # parsed from "wahl" subcommand
+    ranking_indices: Optional[list[int]] = None  # parsed from "votieren" (ballot) subcommand
 
 
 _SUBCOMMAND_ALIASES: dict[str, str] = {
@@ -31,27 +31,42 @@ _SUBCOMMAND_ALIASES: dict[str, str] = {
     "zwischenversorgung": "zwischen",
     "abend": "abend",
     "abendessen": "abend",
-    "votieren": "votieren",
-    "abstimmung": "votieren",
-    "wahl": "wahl",
+    "start": "start",           # start a vote
+    "abstimmung": "start",
+    "wahl": "start",
+    "votieren": "votieren",     # cast a ballot
     "ergebnis": "ergebnis",
     "result": "ergebnis",
     "schließen": "schliessen",
     "schliessen": "schliessen",
+    "schluss": "schliessen",
     "beenden": "schliessen",
     "hilfe": "hilfe",
     "help": "hilfe",
 }
 
 
-def parse_command(text: str, prefix: str = "!mensa") -> Optional[ParsedCommand]:
-    """Parse a message text. Returns None if it's not a bot command."""
+def parse_command(
+    text: str, prefixes: "str | list[str]" = "!mensa"
+) -> Optional[ParsedCommand]:
+    """Parse a message text. Returns None if it is not a recognised bot command.
+
+    prefixes may be a single string or a list; the first matching prefix wins.
+    """
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+
     text = text.strip()
 
-    if not text.lower().startswith(prefix.lower()):
+    used_prefix: Optional[str] = None
+    for p in prefixes:
+        if text.lower().startswith(p.lower()):
+            used_prefix = p
+            break
+    if used_prefix is None:
         return None
 
-    rest = text[len(prefix):].strip()
+    rest = text[len(used_prefix):].strip()
     parts = rest.split(None, 1)
 
     subword = parts[0].lower() if parts else ""
@@ -65,7 +80,7 @@ def parse_command(text: str, prefix: str = "!mensa") -> Optional[ParsedCommand]:
 
     cmd = ParsedCommand(subcommand=subcommand, raw_args=raw_args)
 
-    if subcommand == "wahl":
+    if subcommand == "votieren":
         cmd.ranking_indices = _parse_ranking(raw_args)
 
     return cmd

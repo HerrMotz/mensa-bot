@@ -13,10 +13,14 @@ from datetime import datetime, timedelta, timezone
 from itertools import permutations
 from typing import Callable, Coroutine, Optional
 
+from .approval import evaluate_approval, ApprovalResult
 from .borda import evaluate_borda, BordaResult
 from .database import Database
 from .irv import evaluate_irv, IRVResult
 from .formatter import (
+    format_approval_result,
+    format_approval_ballot_accepted,
+    format_approval_ballot_updated,
     format_borda_result,
     format_vote_result,
     format_ballot_accepted,
@@ -24,6 +28,7 @@ from .formatter import (
     format_no_active_vote,
     format_vote_closed,
     format_invalid_ranking,
+    format_invalid_approval,
 )
 
 log = logging.getLogger(__name__)
@@ -63,8 +68,17 @@ class VoteManager:
     def get_active_vote(self) -> Optional[dict]:
         return self._db.get_active_vote(self._room_id)
 
-    def get_poll_mode(self) -> str:
-        """Return 'native' or 'command' based on Mensa count."""
+    def get_poll_mode(self, voting_method: str = "borda") -> str:
+        """Return 'native' or 'command' based on Mensa count and voting method.
+
+        Approval voting lists each mensa once (no permutation explosion), so it
+        can use native mode for up to 20 mensas (Matrix poll limit).
+        Ranking methods (Borda/IRV) use permutations, capped at max_poll_mensas.
+        """
+        if voting_method == "approval":
+            # Element's poll UI does not support multi-select (max_selections > 1),
+            # so approval voting always uses the command-based flow.
+            return "command"
         return "native" if len(self._mensas) <= self._max_poll_mensas else "command"
 
     def get_permutations(self) -> list[list[str]]:
@@ -72,17 +86,23 @@ class VoteManager:
         return [list(p) for p in permutations(self._mensas)]
 
     async def create_vote(
-        self, voting_method: str = "borda"
+        self, voting_method: str = "approval"
     ) -> tuple[int, str, list[list[str]], datetime]:
         """Create a new vote session.
 
         Returns (session_id, poll_mode, options, closes_at).
-        voting_method must be 'borda' or 'irv'.
+        voting_method must be 'borda', 'irv', or 'approval'.
         """
         now = datetime.now(timezone.utc)
         closes_at = now + self._duration
-        poll_mode = self.get_poll_mode()
-        options = self.get_permutations() if poll_mode == "native" else []
+        poll_mode = self.get_poll_mode(voting_method)
+        if poll_mode == "native":
+            if voting_method == "approval":
+                options = [[m] for m in self._mensas]
+            else:
+                options = self.get_permutations()
+        else:
+            options = []
 
         session_id = self._db.create_vote_session(
             room_id=self._room_id,
@@ -111,7 +131,7 @@ class VoteManager:
         display_name: Optional[str],
         option_index: int,
     ) -> Optional[str]:
-        """Record a ballot from a native Matrix poll response.
+        """Record a ranking ballot from a native Matrix poll (Borda/IRV).
 
         Returns a confirmation message or None if the session is not active.
         """
@@ -141,6 +161,52 @@ class VoteManager:
             return format_ballot_updated(label, ranking)
         return format_ballot_accepted(label, ranking)
 
+    async def record_approval_native_ballot(
+        self,
+        session_id: int,
+        user_id: str,
+        display_name: Optional[str],
+        approved_indices: list[int],
+    ) -> Optional[str]:
+        """Record an approval ballot from a native Matrix poll (Approval voting).
+
+        approved_indices: list of selected option indices (each maps to one mensa).
+        Returns a confirmation message or None if the session is not active.
+        """
+        session = self._db.get_vote_session(session_id)
+        if not session or session["status"] != "open":
+            return None
+
+        options = self._db.get_vote_options(session_id)
+        approved: list[str] = []
+        for idx in approved_indices:
+            if 0 <= idx < len(options):
+                mensa_list = json.loads(options[idx]["ranking_json"])
+                if mensa_list:
+                    approved.append(mensa_list[0])
+            else:
+                log.warning("Ungültiger option_index %d für Sitzung %d", idx, session_id)
+
+        if not approved:
+            log.warning("Leere Zustimmungsliste für %s in Sitzung %d", user_id, session_id)
+            return None
+
+        existing = [b for b in self._db.get_ballots(session_id) if b["user_id"] == user_id]
+        is_update = bool(existing)
+
+        self._db.upsert_ballot(
+            session_id=session_id,
+            user_id=user_id,
+            display_name=display_name,
+            option_index=approved_indices[0] if len(approved_indices) == 1 else None,
+            ranking_json=json.dumps(approved, ensure_ascii=False),
+        )
+
+        label = display_name or user_id
+        if is_update:
+            return format_approval_ballot_updated(label, approved)
+        return format_approval_ballot_accepted(label, approved)
+
     async def record_command_ballot(
         self,
         session_id: int,
@@ -150,7 +216,10 @@ class VoteManager:
     ) -> str:
         """Record a ballot submitted via !mensa wahl command.
 
-        ranking_indices: 1-based indices into self._mensas.
+        For ranking methods (Borda/IRV): ranking_indices are 1-based, must be a
+        full permutation of all mensas.
+        For approval: ranking_indices are 1-based mensa numbers to approve (any
+        non-empty subset).
         Returns a response message.
         """
         session = self._db.get_vote_session(session_id)
@@ -158,6 +227,28 @@ class VoteManager:
             return format_no_active_vote()
 
         n = len(self._mensas)
+        voting_method = session.get("voting_method", "borda")
+
+        if voting_method == "approval":
+            valid_range = set(range(1, n + 1))
+            if not ranking_indices or not all(i in valid_range for i in ranking_indices):
+                return format_invalid_approval(n)
+            approved = [self._mensas[i - 1] for i in dict.fromkeys(ranking_indices)]
+            existing = [b for b in self._db.get_ballots(session_id) if b["user_id"] == user_id]
+            is_update = bool(existing)
+            self._db.upsert_ballot(
+                session_id=session_id,
+                user_id=user_id,
+                display_name=display_name,
+                option_index=None,
+                ranking_json=json.dumps(approved, ensure_ascii=False),
+            )
+            label = display_name or user_id
+            if is_update:
+                return format_approval_ballot_updated(label, approved)
+            return format_approval_ballot_accepted(label, approved)
+
+        # Ranking methods (Borda / IRV): require a complete permutation.
         valid = set(range(1, n + 1))
         if set(ranking_indices) != valid or len(ranking_indices) != n:
             return format_invalid_ranking(n)
@@ -263,9 +354,12 @@ def _evaluate(
     ballot_list: list[list[str]],
     candidates: list[str],
     voting_method: str,
-) -> "BordaResult | IRVResult":
+) -> "ApprovalResult | BordaResult | IRVResult":
+    if voting_method == "approval":
+        return evaluate_approval(ballot_list, candidates)
+
     if len(ballot_list) == 1:
-        # Single voter — first choice wins regardless of method.
+        # Single voter — first choice wins regardless of ranking method.
         winner = ballot_list[0][0] if ballot_list[0] else candidates[0]
         if voting_method == "borda":
             n = len(candidates)
@@ -287,7 +381,15 @@ def _evaluate(
     return evaluate_irv(ballot_list, candidates)
 
 
-def _result_to_json(result: "BordaResult | IRVResult") -> str:
+def _result_to_json(result: "ApprovalResult | BordaResult | IRVResult") -> str:
+    if isinstance(result, ApprovalResult):
+        return json.dumps({
+            "method": "approval",
+            "winner": result.winner,
+            "approval_counts": result.approval_counts,
+            "tie_break_used": result.tie_break_used,
+            "tie_break_reason": result.tie_break_reason,
+        }, ensure_ascii=False)
     if isinstance(result, BordaResult):
         return json.dumps({
             "method": "borda",
@@ -309,12 +411,20 @@ def _result_to_json(result: "BordaResult | IRVResult") -> str:
 
 
 def _format_result(
-    result: "BordaResult | IRVResult",
+    result: "ApprovalResult | BordaResult | IRVResult",
     names_map: list[tuple[str, list[str]]],
     session: dict,
     closes_at: "datetime",
     is_final: bool,
 ) -> str:
+    if isinstance(result, ApprovalResult):
+        return format_approval_result(
+            result=result,
+            ballots_with_names=names_map,
+            session=session,
+            closes_at=closes_at,
+            is_final=is_final,
+        )
     if isinstance(result, BordaResult):
         return format_borda_result(
             result=result,

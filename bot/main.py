@@ -18,7 +18,9 @@ from .commands import parse_command
 from .config import Config, MensaConfig, load_config
 from .database import Database
 from .fetcher import fetch_meals_html, parse_meals
+from .holidays import is_workday
 from .formatter import (
+    build_approval_poll_content,
     build_native_poll_content,
     format_all_mensas,
     format_help,
@@ -84,6 +86,9 @@ class MensaBot:
         await self._matrix.join_room(self._config.matrix.room_id)
         await self._vote_manager.start()
 
+        if self._config.bot.daily_message_enabled:
+            asyncio.create_task(self._daily_message_loop())
+
         log.info("MensaBot läuft. Warte auf Nachrichten …")
         try:
             await self._matrix.sync_forever()
@@ -95,6 +100,45 @@ class MensaBot:
             await self._http.close()
         await self._matrix.close()
         self._db.close()
+
+    # ── Daily meal message ────────────────────────────────────────────────────
+
+    async def _daily_message_loop(self) -> None:
+        """Background task: send the daily meal plan at the configured time on workdays."""
+        import datetime as dtmod
+        from zoneinfo import ZoneInfo
+
+        cfg = self._config.bot
+        tz = ZoneInfo(cfg.timezone)
+        h, m = (int(x) for x in cfg.daily_message_time.split(":"))
+
+        while True:
+            try:
+                now = dtmod.datetime.now(tz)
+                target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                if target <= now:
+                    target += dtmod.timedelta(days=1)
+
+                delay = (target - now).total_seconds()
+                log.debug("Nächste tägliche Nachricht in %.0f Sekunden (%s).", delay, target)
+                await asyncio.sleep(delay)
+
+                fire_date = dtmod.datetime.now(tz).date()
+                if is_workday(fire_date):
+                    log.info("Sende tägliche Mensanachricht für %s.", fire_date)
+                    await self._cmd_show_meals(
+                        self._config.matrix.room_id,
+                        forced_category=CATEGORY_MITTAGESSEN,
+                    )
+                else:
+                    log.info(
+                        "Kein Arbeitstag (%s) – tägliche Nachricht wird übersprungen.", fire_date
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.error("Fehler in der täglichen Nachrichtenroutine: %s", exc)
+                await asyncio.sleep(60)
 
     # ── Message sending ───────────────────────────────────────────────────────
 
@@ -110,7 +154,7 @@ class MensaBot:
         body: str,
         display_name: Optional[str],
     ) -> None:
-        cmd = parse_command(body, self._config.bot.command_prefix)
+        cmd = parse_command(body, [self._config.bot.command_prefix, "!m"])
         if cmd is None:
             return
 
@@ -126,15 +170,15 @@ class MensaBot:
                 }.get(cmd.subcommand)
                 await self._cmd_show_meals(room_id, forced_category=forced)
 
-            elif cmd.subcommand == "votieren":
+            elif cmd.subcommand == "start":
                 arg = cmd.raw_args.strip().lower()
-                if arg in ("borda", "irv"):
+                if arg in ("borda", "irv", "approval"):
                     method = arg
                 else:
                     method = self._config.bot.voting_method
                 await self._cmd_start_vote(room_id, voting_method=method)
 
-            elif cmd.subcommand == "wahl":
+            elif cmd.subcommand == "votieren":
                 await self._cmd_cast_ballot(room_id, sender, display_name, cmd.ranking_indices)
 
             elif cmd.subcommand == "ergebnis":
@@ -248,11 +292,17 @@ class MensaBot:
 
         # For native mode, also send the Matrix poll.
         if poll_mode == "native":
-            poll_content = build_native_poll_content(
-                mensas=self._mensa_names,
-                options=options,
-                duration_minutes=self._config.bot.vote_duration_minutes,
-            )
+            if voting_method == "approval":
+                poll_content = build_approval_poll_content(
+                    mensas=self._mensa_names,
+                    duration_minutes=self._config.bot.vote_duration_minutes,
+                )
+            else:
+                poll_content = build_native_poll_content(
+                    mensas=self._mensa_names,
+                    options=options,
+                    duration_minutes=self._config.bot.vote_duration_minutes,
+                )
             poll_event_id = await self._matrix.send_poll(room_id, poll_content)
             if poll_event_id:
                 self._vote_manager.set_poll_event_id(session_id, poll_event_id)
@@ -329,7 +379,7 @@ class MensaBot:
         if relates.get("event_id") != poll_event_id:
             return
 
-        # Extract the selected answer ID.
+        # Extract the selected answer ID(s).
         answers = (
             content.get("org.matrix.msc3381.poll.response", {}).get("answers", [])
             or content.get("m.selections", [])
@@ -337,18 +387,32 @@ class MensaBot:
         if not answers:
             return
 
-        try:
-            option_index = int(answers[0])
-        except (ValueError, IndexError, TypeError):
-            log.warning("Ungültige Poll-Antwort von %s: %r", sender, answers)
-            return
+        voting_method = active.get("voting_method", "borda")
 
-        msg = await self._vote_manager.record_native_ballot(
-            session_id=active["id"],
-            user_id=sender,
-            display_name=display_name,
-            option_index=option_index,
-        )
+        if voting_method == "approval":
+            try:
+                approved_indices = [int(a) for a in answers]
+            except (ValueError, TypeError):
+                log.warning("Ungültige Approval-Poll-Antwort von %s: %r", sender, answers)
+                return
+            msg = await self._vote_manager.record_approval_native_ballot(
+                session_id=active["id"],
+                user_id=sender,
+                display_name=display_name,
+                approved_indices=approved_indices,
+            )
+        else:
+            try:
+                option_index = int(answers[0])
+            except (ValueError, IndexError, TypeError):
+                log.warning("Ungültige Poll-Antwort von %s: %r", sender, answers)
+                return
+            msg = await self._vote_manager.record_native_ballot(
+                session_id=active["id"],
+                user_id=sender,
+                display_name=display_name,
+                option_index=option_index,
+            )
         if msg:
             await self._send(room_id, msg)
 

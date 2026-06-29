@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import permutations
 from typing import Optional
 
+from .approval import ApprovalResult
 from .borda import BordaResult
 from .irv import IRVResult, IRVRound
 
@@ -99,7 +100,12 @@ def format_vote_start_message(
     """Announce a new vote in the room."""
     closes_local = closes_at.astimezone()
     time_str = closes_local.strftime("%H:%M Uhr")
-    method_label = "Borda-Zählung" if voting_method == "borda" else "Instant-Runoff-Voting"
+    if voting_method == "borda":
+        method_label = "Borda-Zählung"
+    elif voting_method == "irv":
+        method_label = "Instant-Runoff-Voting"
+    else:
+        method_label = "Approval-Voting"
 
     lines = [
         "🗳 **Abstimmung gestartet!**",
@@ -110,9 +116,14 @@ def format_vote_start_message(
     ]
 
     if poll_mode == "native":
-        lines.append("Bitte wähle deine bevorzugte Reihenfolge im Poll:")
-        for i, ranking in enumerate(options, 1):
-            lines.append(f"  {i}. {' > '.join(ranking)}")
+        if voting_method == "approval":
+            lines.append("Wähle alle Mensen aus, die du akzeptabel findest (Mehrfachauswahl möglich):")
+            for i, mensa in enumerate(mensas, 1):
+                lines.append(f"  {i}. {mensa}")
+        else:
+            lines.append("Bitte wähle deine bevorzugte Reihenfolge im Poll:")
+            for i, ranking in enumerate(options, 1):
+                lines.append(f"  {i}. {' > '.join(ranking)}")
     else:
         lines.append("Da mehr als drei Mensen konfiguriert sind, stimmen wir per Befehl ab.")
         lines.append("")
@@ -120,8 +131,12 @@ def format_vote_start_message(
         for i, mensa in enumerate(mensas, 1):
             lines.append(f"  {i}. {mensa}")
         lines.append("")
-        lines.append("Gib deine Präferenz ein mit:")
-        lines.append("`!mensa wahl 2,1,3` (Beispiel: Mensa 2 > Mensa 1 > Mensa 3)")
+        if voting_method == "approval":
+            lines.append("Gib alle akzeptablen Mensen an mit:")
+            lines.append("`!mensa votieren 1,3` (Beispiel: Mensa 1 und Mensa 3 sind akzeptabel)")
+        else:
+            lines.append("Gib deine Präferenz ein mit:")
+            lines.append("`!mensa votieren 2,1,3` (Beispiel: Mensa 2 > Mensa 1 > Mensa 3)")
 
     return "\n".join(lines)
 
@@ -219,6 +234,47 @@ def format_borda_result(
     return "\n".join(lines)
 
 
+def format_approval_result(
+    result: ApprovalResult,
+    ballots_with_names: list[tuple[str, list[str]]],
+    session: dict,
+    closes_at: datetime,
+    is_final: bool,
+) -> str:
+    """Format the approval voting result message."""
+    lines = []
+    status = "geschlossen" if is_final else "offen"
+    lines.append(f"📊 **Abstimmungsergebnis (Approval)** (Status: {status})")
+    lines.append("")
+
+    if not is_final:
+        remaining = closes_at - datetime.now(timezone.utc)
+        mins = max(0, int(remaining.total_seconds() // 60))
+        secs = max(0, int(remaining.total_seconds() % 60))
+        lines.append(f"⏱ Verbleibende Zeit: {mins} Min {secs} Sek")
+        lines.append("")
+
+    lines.append(f"🏆 **Gewinner: {result.winner}**")
+    if result.tie_break_used:
+        lines.append(f"_(Gleichstand aufgelöst: {result.tie_break_reason})_")
+    lines.append("")
+
+    lines.append("**Zustimmungen (Approval-Voting):**")
+    for candidate, count in sorted(result.approval_counts.items(), key=lambda x: -x[1]):
+        marker = " 🏆" if candidate == result.winner else ""
+        lines.append(f"• {candidate}: {count} Zustimmung(en){marker}")
+    lines.append("")
+
+    lines.append("**Stimmen der Teilnehmenden:**")
+    if ballots_with_names:
+        for display_name, approved in ballots_with_names:
+            lines.append(f"• {display_name}: {', '.join(approved) if approved else '(keine)'}")
+    else:
+        lines.append("_Noch keine Stimmen abgegeben._")
+
+    return "\n".join(lines)
+
+
 def format_no_active_vote() -> str:
     return "Es läuft keine aktive Abstimmung."
 
@@ -240,32 +296,96 @@ def format_ballot_updated(user_display: str, ranking: list[str]) -> str:
     return f"🔄 Stimme von **{user_display}** aktualisiert: {' > '.join(ranking)}"
 
 
+def format_approval_ballot_accepted(user_display: str, approved: list[str]) -> str:
+    choices = ", ".join(approved) if approved else "(keine)"
+    return f"✅ Zustimmung von **{user_display}** gespeichert: {choices}"
+
+
+def format_approval_ballot_updated(user_display: str, approved: list[str]) -> str:
+    choices = ", ".join(approved) if approved else "(keine)"
+    return f"🔄 Zustimmung von **{user_display}** aktualisiert: {choices}"
+
+
 def format_invalid_ranking(num_mensas: int) -> str:
     return (
         f"Ungültige Wahl. Bitte gib eine kommagetrennte Liste mit den Zahlen 1–{num_mensas} an.\n"
-        f"Beispiel: `!mensa wahl 2,1,3`"
+        f"Beispiel: `!mensa votieren 2,1,3`"
+    )
+
+
+def format_invalid_approval(num_mensas: int) -> str:
+    return (
+        f"Ungültige Wahl. Bitte gib eine kommagetrennte Liste von Mensa-Nummern (1–{num_mensas}) an.\n"
+        f"Beispiel: `!mensa votieren 1,3` (bedeutet: Mensa 1 und Mensa 3 sind akzeptabel)"
     )
 
 
 def format_help() -> str:
     return """**MensaBot – Verfügbare Befehle:**
 
-`!mensa` – Zeigt die aktuell relevanten Speisen der konfigurierten Mensen
+`!mensa` oder `!m` – Zeigt die aktuell relevanten Speisen der konfigurierten Mensen
 `!mensa mittag` – Zeigt das Mittagessen
 `!mensa zwischen` – Zeigt die Zwischenversorgung
 `!mensa abend` – Zeigt das Abendessen
-`!mensa votieren` – Startet eine Abstimmung (Standard-Methode aus Konfiguration)
-`!mensa votieren borda` – Startet eine Abstimmung per Borda-Zählung
-`!mensa votieren irv` – Startet eine Abstimmung per Instant-Runoff-Voting
-`!mensa wahl 2,1,3` – Gibt eine Stimme ab (nur im Kommando-Modus)
+`!mensa start` – Startet eine Abstimmung (Standard-Methode aus Konfiguration)
+`!mensa start approval` – Startet eine Approval-Abstimmung (markiere alle akzeptablen Mensen)
+`!mensa start borda` – Startet eine Abstimmung per Borda-Zählung
+`!mensa start irv` – Startet eine Abstimmung per Instant-Runoff-Voting
+`!mensa votieren 1,3` – Gibt eine Stimme ab (Bedeutung je nach Methode)
 `!mensa ergebnis` – Zeigt das aktuelle Abstimmungsergebnis
 `!mensa schließen` – Schließt die aktuelle Abstimmung manuell
 `!mensa hilfe` – Zeigt diese Hilfemeldung
 
-_Abstimmungen verwenden Präferenzwahl (Borda oder IRV)._"""
+_Kurzform `!m` funktioniert für alle Befehle, z. B. `!m start`, `!m votieren 1,2`._
+_Abstimmungsmethoden: Approval (Standard), Borda-Zählung, Instant-Runoff-Voting._"""
 
 
 # ── Poll event content builder ────────────────────────────────────────────────
+
+def build_approval_poll_content(
+    mensas: list[str],
+    duration_minutes: int,
+) -> dict:
+    """Build a Matrix MSC3381 poll for approval voting.
+
+    Each mensa is a separate option; voters may select any number of them.
+    """
+    question_text = "Welche Mensen sind für dich akzeptabel? (Mehrfachauswahl möglich)"
+
+    stable_options = [
+        {"m.id": str(i), "m.text": mensa}
+        for i, mensa in enumerate(mensas)
+    ]
+    unstable_options = [
+        {
+            "id": str(i),
+            "org.matrix.msc1767.text": mensa,
+            "body": mensa,
+        }
+        for i, mensa in enumerate(mensas)
+    ]
+
+    return {
+        "m.poll": {
+            "question": {"m.text": question_text},
+            "kind": "m.disclosed",
+            "max_selections": len(mensas),
+            "answers": stable_options,
+        },
+        "org.matrix.msc3381.poll.start": {
+            "question": {
+                "org.matrix.msc1767.text": question_text,
+                "body": question_text,
+            },
+            "kind": "org.matrix.msc3381.poll.disclosed",
+            "max_selections": len(mensas),
+            "answers": unstable_options,
+        },
+        "org.matrix.msc1767.text": question_text,
+        "body": question_text,
+        "msgtype": "m.text",
+    }
+
 
 def build_native_poll_content(
     mensas: list[str],

@@ -45,7 +45,9 @@ class BotConfig:
     timezone: str = "Europe/Berlin"
     db_path: str = "/data/mensa_bot.db"
     log_level: str = "INFO"
-    voting_method: str = "borda"   # "borda" or "irv"
+    voting_method: str = "approval"   # "borda", "irv", or "approval"
+    daily_message_enabled: bool = False
+    daily_message_time: str = "10:30"
 
 
 @dataclass
@@ -75,9 +77,9 @@ def load_config(path: str) -> Config:
         raise ValueError("config.yaml muss entweder 'password' oder 'access_token' enthalten.")
 
     b = raw.get("bot", {})
-    voting_method = b.get("voting_method", "borda").lower()
-    if voting_method not in ("borda", "irv"):
-        raise ValueError(f"Ungültige voting_method: {voting_method!r}. Erlaubt: 'borda', 'irv'.")
+    voting_method = b.get("voting_method", "approval").lower()
+    if voting_method not in ("borda", "irv", "approval"):
+        raise ValueError(f"Ungültige voting_method: {voting_method!r}. Erlaubt: 'borda', 'irv', 'approval'.")
     bot = BotConfig(
         command_prefix=b.get("command_prefix", "!mensa"),
         max_poll_mensas=b.get("max_poll_mensas", 3),
@@ -87,6 +89,8 @@ def load_config(path: str) -> Config:
         db_path=b.get("db_path", "/data/mensa_bot.db"),
         log_level=b.get("log_level", "INFO"),
         voting_method=voting_method,
+        daily_message_enabled=b.get("daily_message_enabled", False),
+        daily_message_time=b.get("daily_message_time", "10:30"),
     )
 
     mt = raw.get("meal_times", {})

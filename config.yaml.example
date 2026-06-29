@@ -17,10 +17,15 @@ bot:
   max_poll_mensas: 3
   vote_duration_minutes: 20
   cache_duration_minutes: 30
-  # Default voting method: "borda" (Borda count) or "irv" (Instant-Runoff-Voting).
-  # Can be overridden per vote with !mensa votieren borda / !mensa votieren irv.
-  voting_method: "borda"
+  # Default voting method: "approval" (Approval voting), "borda" (Borda count),
+  # or "irv" (Instant-Runoff-Voting).
+  # Can be overridden per vote with !mensa votieren approval/borda/irv.
+  voting_method: "approval"
   timezone: "Europe/Berlin"
+  # Automatically send the daily meal plan at the configured time on workdays.
+  # Thuringian public holidays are respected (Karfreitag, Reformationstag, etc.).
+  daily_message_enabled: false
+  daily_message_time: "10:30"
   db_path: "/data/mensa_bot.db"
   log_level: "INFO"
 

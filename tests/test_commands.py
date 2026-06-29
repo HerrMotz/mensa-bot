@@ -15,25 +15,41 @@ def test_heute():
     assert cmd.subcommand == "heute"
 
 
-def test_votieren():
-    cmd = parse_command("!mensa votieren")
-    assert cmd.subcommand == "votieren"
+def test_start():
+    cmd = parse_command("!mensa start")
+    assert cmd.subcommand == "start"
+
+
+def test_start_with_method():
+    cmd = parse_command("!mensa start borda")
+    assert cmd.subcommand == "start"
+    assert cmd.raw_args == "borda"
 
 
 def test_abstimmung_alias():
     cmd = parse_command("!mensa abstimmung")
+    assert cmd.subcommand == "start"
+
+
+def test_votieren_casts_ballot():
+    cmd = parse_command("!mensa votieren 2,1,3")
     assert cmd.subcommand == "votieren"
-
-
-def test_wahl_with_ranking():
-    cmd = parse_command("!mensa wahl 2,1,3")
-    assert cmd.subcommand == "wahl"
     assert cmd.ranking_indices == [2, 1, 3]
 
 
-def test_wahl_no_args():
-    cmd = parse_command("!mensa wahl")
-    assert cmd.subcommand == "wahl"
+def test_votieren_no_args():
+    cmd = parse_command("!mensa votieren")
+    assert cmd.subcommand == "votieren"
+    assert cmd.ranking_indices is None
+
+
+def test_votieren_spaces_in_indices():
+    cmd = parse_command("!mensa votieren 1, 3, 2")
+    assert cmd.ranking_indices == [1, 3, 2]
+
+
+def test_votieren_invalid_indices():
+    cmd = parse_command("!mensa votieren abc")
     assert cmd.ranking_indices is None
 
 
@@ -50,6 +66,21 @@ def test_schliessen():
 def test_schliessen_ascii_alias():
     cmd = parse_command("!mensa schliessen")
     assert cmd.subcommand == "schliessen"
+
+
+def test_schluss_alias():
+    cmd = parse_command("!mensa schluss")
+    assert cmd.subcommand == "schliessen"
+
+
+def test_wahl_alias_starts_vote():
+    cmd = parse_command("!mensa wahl")
+    assert cmd.subcommand == "start"
+
+
+def test_short_prefix_wahl():
+    cmd = parse_command("!m wahl", prefixes=["!mensa", "!m"])
+    assert cmd.subcommand == "start"
 
 
 def test_hilfe():
@@ -72,8 +103,46 @@ def test_not_a_command():
     assert cmd is None
 
 
+# ── Short prefix !m ──────────────────────────────────────────────────────────
+
+def test_short_prefix_bare():
+    cmd = parse_command("!m", prefixes=["!mensa", "!m"])
+    assert cmd is not None
+    assert cmd.subcommand == "mensa"
+
+
+def test_short_prefix_heute():
+    cmd = parse_command("!m heute", prefixes=["!mensa", "!m"])
+    assert cmd.subcommand == "heute"
+
+
+def test_short_prefix_start():
+    cmd = parse_command("!m start", prefixes=["!mensa", "!m"])
+    assert cmd.subcommand == "start"
+
+
+def test_short_prefix_votieren():
+    cmd = parse_command("!m votieren 1,2", prefixes=["!mensa", "!m"])
+    assert cmd.subcommand == "votieren"
+    assert cmd.ranking_indices == [1, 2]
+
+
+def test_long_prefix_still_works():
+    cmd = parse_command("!mensa start borda", prefixes=["!mensa", "!m"])
+    assert cmd.subcommand == "start"
+    assert cmd.raw_args == "borda"
+
+
+def test_short_prefix_not_recognised_without_list():
+    # When only the long prefix is passed, !m should not match.
+    cmd = parse_command("!m heute", prefixes="!mensa")
+    assert cmd is None
+
+
+# ── Other ────────────────────────────────────────────────────────────────────
+
 def test_different_prefix():
-    cmd = parse_command("!bot mensa", prefix="!bot")
+    cmd = parse_command("!bot mensa", prefixes="!bot")
     assert cmd is not None
     assert cmd.subcommand == "mensa"
 
@@ -88,13 +157,3 @@ def test_whitespace_trimmed():
     cmd = parse_command("  !mensa   heute  ")
     assert cmd is not None
     assert cmd.subcommand == "heute"
-
-
-def test_wahl_spaces_in_ranking():
-    cmd = parse_command("!mensa wahl 1, 3, 2")
-    assert cmd.ranking_indices == [1, 3, 2]
-
-
-def test_wahl_invalid_ranking():
-    cmd = parse_command("!mensa wahl abc")
-    assert cmd.ranking_indices is None

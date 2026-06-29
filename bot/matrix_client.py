@@ -58,6 +58,7 @@ class MatrixBot:
         self._client.add_event_callback(self._on_message, nio.RoomMessageText)
         self._client.add_event_callback(self._on_encrypted, nio.MegolmEvent)
         self._client.add_to_device_callback(self._on_key_verification, nio.KeyVerificationEvent)
+        self._client.add_to_device_callback(self._on_unknown_to_device, nio.UnknownToDeviceEvent)
 
         # Callbacks registered by the application layer.
         self._on_command_cb: Optional[Callable[[str, str, str, Optional[str]], Coroutine]] = None
@@ -241,8 +242,136 @@ class MatrixBot:
         log.debug("Verschlüsselte Nachricht konnte nicht entschlüsselt werden von %s.", event.sender)
         # matrix-nio handles key requests automatically with the store.
 
+    async def _on_unknown_to_device(self, event: nio.UnknownToDeviceEvent) -> None:
+        """Handle m.key.verification.request — the modern Element verification flow.
+
+        Element sends this before m.key.verification.start. We respond with
+        m.key.verification.ready so Element proceeds to the SAS emoji step.
+        """
+        if event.type != "m.key.verification.request":
+            return
+
+        content = event.source.get("content", {})
+        tx_id = content.get("transaction_id", "")
+        from_device = content.get("from_device", "")
+        methods = content.get("methods", [])
+
+        if "m.sas.v1" not in methods:
+            log.warning("Verifizierungsanfrage von %s unterstützt kein m.sas.v1: %s", event.sender, methods)
+            return
+
+        log.info(
+            "Verifizierungsanfrage (m.key.verification.request) von %s (tx: %s). Sende ready …",
+            event.sender, tx_id,
+        )
+        ready_msg = nio.ToDeviceMessage(
+            type="m.key.verification.ready",
+            recipient=event.sender,
+            recipient_device=from_device,
+            content={
+                "from_device": self._client.device_id,
+                "methods": ["m.sas.v1"],
+                "transaction_id": tx_id,
+            },
+        )
+        resp = await self._client.to_device(ready_msg)
+        if isinstance(resp, nio.ToDeviceError):
+            log.error("Fehler beim Senden von verification.ready: %s", resp.message)
+
     async def _on_key_verification(self, event: nio.KeyVerificationEvent) -> None:
-        log.debug("Schlüsselverifizierungs-Ereignis: %s", type(event).__name__)
+        tx_id = event.transaction_id
+
+        if isinstance(event, nio.KeyVerificationStart):
+            if "emoji" not in event.short_authentication_string:
+                log.warning(
+                    "Gegenseite unterstützt keine Emoji-Verifizierung: %s",
+                    event.short_authentication_string,
+                )
+                await self._client.cancel_key_verification(tx_id, reject=False)
+                return
+
+            log.info(
+                "Schlüsselverifizierung gestartet von %s (tx: %s). Akzeptiere …",
+                event.sender, tx_id,
+            )
+            resp = await self._client.accept_key_verification(tx_id)
+            if isinstance(resp, nio.ToDeviceError):
+                log.error("Fehler beim Akzeptieren der Verifizierung: %s", resp.message)
+                return
+
+            sas = self._client.key_verifications.get(tx_id)
+            if sas:
+                resp = await self._client.to_device(sas.share_key())
+                if isinstance(resp, nio.ToDeviceError):
+                    log.error("Fehler beim Senden des SAS-Schlüssels: %s", resp.message)
+
+        elif isinstance(event, nio.KeyVerificationKey):
+            sas = self._client.key_verifications.get(tx_id)
+            if sas is None:
+                log.warning("Kein aktiver SAS-Kontext für tx_id=%s", tx_id)
+                return
+            emoji_list = sas.get_emoji()
+            emoji_str = "  ".join(f"{e[0]} ({e[1]})" for e in emoji_list)
+            log.info(
+                "\n"
+                "╔══════════════════════════════════════════════════╗\n"
+                "║  SICHERHEITSVERIFIZIERUNG – bitte vergleichen:  ║\n"
+                "║                                                  ║\n"
+                "║  %-48s║\n"
+                "║                                                  ║\n"
+                "║  Stimmen die Emojis in Element überein?          ║\n"
+                "║  Bot bestätigt automatisch. Wenn sie NICHT       ║\n"
+                "║  übereinstimmen, brich in Element ab.            ║\n"
+                "╚══════════════════════════════════════════════════╝",
+                emoji_str,
+            )
+            resp = await self._client.confirm_short_auth_string(tx_id)
+            if isinstance(resp, nio.ToDeviceError):
+                log.error("Fehler beim Bestätigen des SAS: %s", resp.message)
+
+        elif isinstance(event, nio.KeyVerificationMac):
+            sas = self._client.key_verifications.get(tx_id)
+            if sas is None:
+                log.warning("Kein SAS-Kontext für MAC-Event (tx: %s)", tx_id)
+                return
+            try:
+                mac_msg = sas.get_mac()
+            except nio.LocalProtocolError as exc:
+                log.warning("Verifizierung abgebrochen oder Protokollfehler: %s", exc)
+                return
+            resp = await self._client.to_device(mac_msg)
+            if isinstance(resp, nio.ToDeviceError):
+                log.error("Fehler beim Senden des MAC: %s", resp.message)
+                return
+            if sas.verified:
+                log.info(
+                    "✅ Schlüsselverifizierung erfolgreich abgeschlossen (tx: %s). Verifizierte Geräte: %s",
+                    tx_id, sas.verified_devices,
+                )
+                # Matrix spec v1.1+ requires both sides to send m.key.verification.done
+                # after the MAC exchange. Element waits for this before marking the session
+                # verified; without it the verification times out on the Element side.
+                done_msg = nio.ToDeviceMessage(
+                    type="m.key.verification.done",
+                    recipient=sas.other_olm_device.user_id,
+                    recipient_device=sas.other_olm_device.id,
+                    content={"transaction_id": tx_id},
+                )
+                resp = await self._client.to_device(done_msg)
+                if isinstance(resp, nio.ToDeviceError):
+                    log.error("Fehler beim Senden von verification.done: %s", resp.message)
+                else:
+                    log.info("m.key.verification.done gesendet (tx: %s).", tx_id)
+            else:
+                log.warning("MAC gesendet, aber SAS nicht als verifiziert markiert (tx: %s).", tx_id)
+
+        elif isinstance(event, nio.KeyVerificationCancel):
+            log.warning(
+                "Schlüsselverifizierung abgebrochen von %s: %s", event.sender, event.reason
+            )
+
+        else:
+            log.debug("Unbekanntes Verifizierungs-Ereignis: %s (tx: %s)", type(event).__name__, tx_id)
 
     async def handle_to_device_events(self) -> None:
         """Process any pending to-device events (key sharing, verification)."""
