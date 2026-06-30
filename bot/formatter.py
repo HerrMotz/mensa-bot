@@ -279,6 +279,14 @@ def format_no_active_vote() -> str:
     return "Es läuft keine aktive Abstimmung."
 
 
+def format_vote_reminder(closes_at: datetime, minutes_left: int) -> str:
+    time_str = closes_at.astimezone().strftime("%H:%M Uhr")
+    return (
+        f"⏰ **Erinnerung:** Die Abstimmung endet in {minutes_left} Minute(n) (um {time_str}). "
+        "Wer noch nicht abgestimmt hat, bitte jetzt abstimmen!"
+    )
+
+
 def format_vote_already_active(closes_at: datetime) -> str:
     time_str = closes_at.astimezone().strftime("%H:%M Uhr")
     return f"Es läuft bereits eine Abstimmung (endet um {time_str}). Bitte warte, bis sie abgeschlossen ist."

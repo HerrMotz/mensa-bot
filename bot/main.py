@@ -16,6 +16,7 @@ import aiohttp
 
 from .commands import parse_command
 from .config import Config, MensaConfig, load_config
+from .dieter import DieterBot
 from .database import Database
 from .fetcher import fetch_meals_html, parse_meals
 from .holidays import is_workday
@@ -61,6 +62,8 @@ class MensaBot:
         self._matrix.on_poll_response(self._handle_poll_response)
         self._matrix.register_sync_callback()
 
+        self._dieter: Optional[DieterBot] = None  # initialised in run() after http session
+
         self._mensa_names = [m.name for m in config.mensas]
 
         self._vote_manager = VoteManager(
@@ -68,6 +71,7 @@ class MensaBot:
             mensas=self._mensa_names,
             max_poll_mensas=config.bot.max_poll_mensas,
             vote_duration_minutes=config.bot.vote_duration_minutes,
+            vote_reminder_minutes=config.bot.vote_reminder_minutes,
             room_id=config.matrix.room_id,
             send_message=self._send,
         )
@@ -77,6 +81,15 @@ class MensaBot:
     async def run(self) -> None:
         self._db.connect()
         self._http = aiohttp.ClientSession()
+
+        if self._config.bot.gemini_api_key:
+            self._dieter = DieterBot(
+                api_key=self._config.bot.gemini_api_key,
+                model=self._config.bot.gemini_model,
+                session=self._http,
+            )
+            log.info("DIETER aktiviert (Trigger: %s, Modell: %s).",
+                     self._config.bot.dieter_trigger, self._config.bot.gemini_model)
 
         # Ensure all configured mensas exist in the DB.
         for m in self._config.mensas:
@@ -153,47 +166,76 @@ class MensaBot:
         sender: str,
         body: str,
         display_name: Optional[str],
+        formatted_body: Optional[str] = None,
     ) -> None:
+        # Explicit bot command takes priority.
         cmd = parse_command(body, [self._config.bot.command_prefix, "!m"])
-        if cmd is None:
+        if cmd is not None:
+            log.info("Befehl von %s: %r", sender, body[:80])
+            try:
+                await self._dispatch_subcommand(room_id, sender, display_name, cmd.subcommand, cmd)
+            except Exception as exc:
+                log.exception("Fehler bei der Befehlsverarbeitung: %s", exc)
+                await self._send(room_id, "Es ist ein interner Fehler aufgetreten. Bitte versuche es später erneut.")
             return
 
-        log.info("Befehl von %s: %r", sender, body[:80])
+        # Natural language via @DIETER mention.
+        # Check both plain body (for "@DIETER" text trigger) and formatted_body (for Matrix
+        # mention links which render as "DIETER: …" in plain text without the "@").
+        trigger = self._config.bot.dieter_trigger
+        bot_user_id = self._matrix.user_id or ""
+        dieter_mentioned = (
+            trigger.lower() in body.lower()
+            or (formatted_body is not None and (
+                trigger.lower() in formatted_body.lower()
+                or (bot_user_id and bot_user_id in formatted_body)
+            ))
+        )
+        if self._dieter and dieter_mentioned:
+            log.info("DIETER angesprochen von %s: %r", sender, body[:80])
+            try:
+                dieter_text, subcommand = await self._dieter.respond(body)
+                await self._send(room_id, f"**DIETER:** {dieter_text}")
+                if subcommand:
+                    await self._dispatch_subcommand(room_id, sender, display_name, subcommand, None)
+            except Exception as exc:
+                log.exception("Fehler in DIETER-Verarbeitung: %s", exc)
 
-        try:
-            if cmd.subcommand in ("mensa", "heute", "mittag", "zwischen", "abend"):
-                forced = {
-                    "heute": CATEGORY_MITTAGESSEN,
-                    "mittag": CATEGORY_MITTAGESSEN,
-                    "zwischen": CATEGORY_ZWISCHENVERSORGUNG,
-                    "abend": CATEGORY_ABENDESSEN,
-                }.get(cmd.subcommand)
-                await self._cmd_show_meals(room_id, forced_category=forced)
+    async def _dispatch_subcommand(
+        self,
+        room_id: str,
+        sender: str,
+        display_name: Optional[str],
+        subcommand: str,
+        cmd,  # ParsedCommand | None
+    ) -> None:
+        if subcommand in ("mensa", "heute", "mittag", "zwischen", "abend"):
+            forced = {
+                "heute": CATEGORY_MITTAGESSEN,
+                "mittag": CATEGORY_MITTAGESSEN,
+                "zwischen": CATEGORY_ZWISCHENVERSORGUNG,
+                "abend": CATEGORY_ABENDESSEN,
+            }.get(subcommand)
+            await self._cmd_show_meals(room_id, forced_category=forced)
 
-            elif cmd.subcommand == "start":
-                arg = cmd.raw_args.strip().lower()
-                if arg in ("borda", "irv", "approval"):
-                    method = arg
-                else:
-                    method = self._config.bot.voting_method
-                await self._cmd_start_vote(room_id, voting_method=method)
+        elif subcommand == "start":
+            raw_args = cmd.raw_args.strip().lower() if cmd else ""
+            method = raw_args if raw_args in ("borda", "irv", "approval") else self._config.bot.voting_method
+            await self._cmd_start_vote(room_id, voting_method=method)
 
-            elif cmd.subcommand == "votieren":
-                await self._cmd_cast_ballot(room_id, sender, display_name, cmd.ranking_indices)
+        elif subcommand == "votieren":
+            ranking = cmd.ranking_indices if cmd else None
+            await self._cmd_cast_ballot(room_id, sender, display_name, ranking)
 
-            elif cmd.subcommand == "ergebnis":
-                msg = await self._vote_manager.get_current_result_message()
-                await self._send(room_id, msg)
+        elif subcommand == "ergebnis":
+            msg = await self._vote_manager.get_current_result_message()
+            await self._send(room_id, msg)
 
-            elif cmd.subcommand == "schliessen":
-                await self._cmd_close_vote(room_id)
+        elif subcommand == "schliessen":
+            await self._cmd_close_vote(room_id)
 
-            elif cmd.subcommand == "hilfe":
-                await self._send(room_id, format_help())
-
-        except Exception as exc:
-            log.exception("Fehler bei der Befehlsverarbeitung: %s", exc)
-            await self._send(room_id, "Es ist ein interner Fehler aufgetreten. Bitte versuche es später erneut.")
+        elif subcommand == "hilfe":
+            await self._send(room_id, format_help())
 
     async def _cmd_show_meals(
         self, room_id: str, forced_category: Optional[str] = None
@@ -434,6 +476,9 @@ def setup_logging(level: str) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    # Suppress noisy third-party loggers.
+    logging.getLogger("peewee").setLevel(logging.WARNING)
+    logging.getLogger("nio.responses").setLevel(logging.WARNING)
 
 
 def main() -> None:

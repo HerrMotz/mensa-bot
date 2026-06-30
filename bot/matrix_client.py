@@ -61,7 +61,7 @@ class MatrixBot:
         self._client.add_to_device_callback(self._on_unknown_to_device, nio.UnknownToDeviceEvent)
 
         # Callbacks registered by the application layer.
-        self._on_command_cb: Optional[Callable[[str, str, str, Optional[str]], Coroutine]] = None
+        self._on_command_cb: Optional[Callable[[str, str, str, Optional[str], Optional[str]], Coroutine]] = None
         self._on_poll_response_cb: Optional[Callable[[str, str, str, dict, Optional[str]], Coroutine]] = None
 
         self._room_id: Optional[str] = None
@@ -72,9 +72,13 @@ class MatrixBot:
     def set_room_id(self, room_id: str) -> None:
         self._room_id = room_id
 
-    def on_command(self, cb: Callable[[str, str, str, Optional[str]], Coroutine]) -> None:
-        """Register callback: (room_id, sender, message_body, display_name) → None."""
+    def on_command(self, cb: Callable[[str, str, str, Optional[str], Optional[str]], Coroutine]) -> None:
+        """Register callback: (room_id, sender, body, display_name, formatted_body) → None."""
         self._on_command_cb = cb
+
+    @property
+    def user_id(self) -> Optional[str]:
+        return self._client.user_id
 
     def on_poll_response(
         self, cb: Callable[[str, str, str, dict, Optional[str]], Coroutine]
@@ -233,9 +237,14 @@ class MatrixBot:
         if event.sender == self._client.user_id:
             return  # Ignore own messages.
 
+        log.info(
+            "Nachricht von %s — body=%r  formatted_body=%r",
+            event.sender, event.body, event.formatted_body,
+        )
+
         display_name = room.user_name(event.sender) or event.sender
         if self._on_command_cb:
-            await self._on_command_cb(room.room_id, event.sender, event.body, display_name)
+            await self._on_command_cb(room.room_id, event.sender, event.body, display_name, event.formatted_body)
 
     async def _on_encrypted(self, room: nio.MatrixRoom, event: nio.MegolmEvent) -> None:
         """Handle undecryptable events — request missing keys."""

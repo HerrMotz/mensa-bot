@@ -46,8 +46,12 @@ class BotConfig:
     db_path: str = "/data/mensa_bot.db"
     log_level: str = "INFO"
     voting_method: str = "approval"   # "borda", "irv", or "approval"
+    vote_reminder_minutes: int = 5
     daily_message_enabled: bool = False
     daily_message_time: str = "10:30"
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.0-flash"
+    dieter_trigger: str = "@DIETER"
 
 
 @dataclass
@@ -89,8 +93,12 @@ def load_config(path: str) -> Config:
         db_path=b.get("db_path", "/data/mensa_bot.db"),
         log_level=b.get("log_level", "INFO"),
         voting_method=voting_method,
+        vote_reminder_minutes=b.get("vote_reminder_minutes", 5),
         daily_message_enabled=b.get("daily_message_enabled", False),
         daily_message_time=b.get("daily_message_time", "10:30"),
+        gemini_api_key=b.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY"),
+        gemini_model=b.get("gemini_model", "gemini-2.0-flash"),
+        dieter_trigger=b.get("dieter_trigger", "@DIETER"),
     )
 
     mt = raw.get("meal_times", {})

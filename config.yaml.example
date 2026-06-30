@@ -16,6 +16,8 @@ bot:
   # 3 mensas → 6 permutations; 4 mensas → 24 permutations (exceeds Matrix poll limit of 20).
   max_poll_mensas: 3
   vote_duration_minutes: 20
+  # Send a reminder N minutes before the vote closes (0 to disable).
+  vote_reminder_minutes: 5
   cache_duration_minutes: 30
   # Default voting method: "approval" (Approval voting), "borda" (Borda count),
   # or "irv" (Instant-Runoff-Voting).
@@ -28,6 +30,12 @@ bot:
   daily_message_time: "10:30"
   db_path: "/data/mensa_bot.db"
   log_level: "INFO"
+  # DIETER: natural language interface via Gemini (optional).
+  # Get a free API key at https://aistudio.google.com/
+  # Can also be set via the GEMINI_API_KEY environment variable.
+  # gemini_api_key: "AIza..."
+  # gemini_model: "gemini-2.0-flash"
+  # dieter_trigger: "@DIETER"
 
 meal_times:
   # Format: "HH:MM"

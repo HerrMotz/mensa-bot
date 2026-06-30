@@ -27,6 +27,7 @@ from .formatter import (
     format_ballot_updated,
     format_no_active_vote,
     format_vote_closed,
+    format_vote_reminder,
     format_invalid_ranking,
     format_invalid_approval,
 )
@@ -43,14 +44,17 @@ class VoteManager:
         vote_duration_minutes: int,
         room_id: str,
         send_message: Callable[[str, str], Coroutine],
+        vote_reminder_minutes: int = 5,
     ) -> None:
         self._db = db
         self._mensas = mensas
         self._max_poll_mensas = max_poll_mensas
         self._duration = timedelta(minutes=vote_duration_minutes)
+        self._reminder_delta = timedelta(minutes=vote_reminder_minutes)
         self._room_id = room_id
         self._send_message = send_message
         self._close_task: Optional[asyncio.Task] = None
+        self._reminder_task: Optional[asyncio.Task] = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -274,6 +278,8 @@ class VoteManager:
         """Evaluate and close a vote. Returns the result message."""
         if self._close_task and not self._close_task.done():
             self._close_task.cancel()
+        if self._reminder_task and not self._reminder_task.done():
+            self._reminder_task.cancel()
 
         session = self._db.get_vote_session(session_id)
         if not session or session["status"] != "open":
@@ -331,10 +337,35 @@ class VoteManager:
     async def _schedule_auto_close(self, session_id: int, closes_at: datetime) -> None:
         if self._close_task and not self._close_task.done():
             self._close_task.cancel()
-        delay = (closes_at - datetime.now(timezone.utc)).total_seconds()
-        if delay < 0:
-            delay = 0
-        self._close_task = asyncio.create_task(self._auto_close(session_id, delay))
+        if self._reminder_task and not self._reminder_task.done():
+            self._reminder_task.cancel()
+
+        now = datetime.now(timezone.utc)
+        close_delay = max(0.0, (closes_at - now).total_seconds())
+        self._close_task = asyncio.create_task(self._auto_close(session_id, close_delay))
+
+        reminder_at = closes_at - self._reminder_delta
+        reminder_delay = (reminder_at - now).total_seconds()
+        if reminder_delay > 0:
+            minutes_left = int(self._reminder_delta.total_seconds() // 60)
+            self._reminder_task = asyncio.create_task(
+                self._send_reminder(session_id, reminder_delay, closes_at, minutes_left)
+            )
+
+    async def _send_reminder(
+        self, session_id: int, delay: float, closes_at: datetime, minutes_left: int
+    ) -> None:
+        try:
+            await asyncio.sleep(delay)
+            session = self._db.get_vote_session(session_id)
+            if session and session["status"] == "open":
+                log.info("Erinnerung für Abstimmung %d (%d min verbleibend).", session_id, minutes_left)
+                message = format_vote_reminder(closes_at, minutes_left)
+                await self._send_message(self._room_id, message)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            log.error("Fehler beim Senden der Abstimmungserinnerung: %s", exc)
 
     async def _auto_close(self, session_id: int, delay: float) -> None:
         try:
