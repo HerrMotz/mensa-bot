@@ -34,7 +34,7 @@ bot:
   # Get a free API key at https://aistudio.google.com/
   # Can also be set via the GEMINI_API_KEY environment variable.
   # gemini_api_key: "AIza..."
-  # gemini_model: "gemini-2.0-flash"
+  # gemini_model: "gemini-3.6-flash"
   # dieter_trigger: "@DIETER"
 
 meal_times:

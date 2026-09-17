@@ -73,3 +73,25 @@ def filter_meals_by_category(
     """Return meals matching the given category (case-insensitive prefix match)."""
     cat_lower = category.lower()
     return [m for m in meals if m.get("category", "").lower().startswith(cat_lower)]
+
+
+def choose_available_category(
+    preferred_category: str, meal_lists: list[list[dict]]
+) -> str:
+    """Fall back to lunch when an automatically selected category is absent.
+
+    Some locations only publish a lunch section. After the configured lunch
+    period, hiding those meals behind an empty Zwischenversorgung or
+    Abendessen result is misleading: food for the day was fetched, but the
+    selected category does not exist at any configured location.
+    """
+    if any(filter_meals_by_category(meals, preferred_category) for meals in meal_lists):
+        return preferred_category
+
+    if preferred_category != CATEGORY_MITTAGESSEN and any(
+        filter_meals_by_category(meals, CATEGORY_MITTAGESSEN)
+        for meals in meal_lists
+    ):
+        return CATEGORY_MITTAGESSEN
+
+    return preferred_category

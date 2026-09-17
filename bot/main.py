@@ -35,6 +35,7 @@ from .meal_time import (
     CATEGORY_ABENDESSEN,
     CATEGORY_MITTAGESSEN,
     CATEGORY_ZWISCHENVERSORGUNG,
+    choose_available_category,
     filter_meals_by_category,
     get_relevant_category,
 )
@@ -195,7 +196,7 @@ class MensaBot:
             log.info("DIETER angesprochen von %s: %r", sender, body[:80])
             try:
                 dieter_text, subcommand = await self._dieter.respond(body)
-                await self._send(room_id, f"**DIETER:** {dieter_text}")
+                await self._send(room_id, dieter_text)
                 if subcommand:
                     await self._dispatch_subcommand(room_id, sender, display_name, subcommand, None)
             except Exception as exc:
@@ -265,14 +266,31 @@ class MensaBot:
         target = local_now + dtmod.timedelta(days=1) if show_next else local_now
         target_date = target.date()
 
-        results = []
+        fetched_results = []
         for mensa_cfg in cfg.mensas:
             meals, error = await self._get_meals_for_mensa(mensa_cfg, target_date)
+            fetched_results.append((mensa_cfg.name, meals, error))
+
+        if forced_category is None:
+            available_category = choose_available_category(
+                category,
+                [meals for _, meals, error in fetched_results if error is None],
+            )
+            if available_category != category:
+                log.info(
+                    "Keine Gerichte für %s; zeige stattdessen %s.",
+                    category,
+                    available_category,
+                )
+                category = available_category
+
+        results = []
+        for mensa_name, meals, error in fetched_results:
             if error is None:
                 filtered = filter_meals_by_category(meals, category)
-                results.append((mensa_cfg.name, filtered, None))
+                results.append((mensa_name, filtered, None))
             else:
-                results.append((mensa_cfg.name, [], error))
+                results.append((mensa_name, [], error))
 
         msg = format_all_mensas(results, category, target)
         if show_next:

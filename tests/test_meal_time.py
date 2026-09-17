@@ -8,6 +8,7 @@ from bot.meal_time import (
     CATEGORY_ABENDESSEN,
     CATEGORY_MITTAGESSEN,
     CATEGORY_ZWISCHENVERSORGUNG,
+    choose_available_category,
     filter_meals_by_category,
     get_relevant_category,
 )
@@ -92,3 +93,31 @@ def test_filter_case_insensitive():
 def test_filter_empty():
     filtered = filter_meals_by_category([], "Mittagessen")
     assert filtered == []
+
+
+def test_falls_back_to_lunch_when_automatic_category_is_unavailable():
+    meal_lists = [
+        [{"category": "Mittagessen", "name": "Pasta"}],
+        [{"category": "Mittagessen", "name": "Suppe"}],
+    ]
+
+    category = choose_available_category(CATEGORY_ZWISCHENVERSORGUNG, meal_lists)
+
+    assert category == CATEGORY_MITTAGESSEN
+
+
+def test_keeps_preferred_category_when_any_location_offers_it():
+    meal_lists = [
+        [{"category": "Mittagessen", "name": "Pasta"}],
+        [{"category": "Abendessen", "name": "Suppe"}],
+    ]
+
+    category = choose_available_category(CATEGORY_ABENDESSEN, meal_lists)
+
+    assert category == CATEGORY_ABENDESSEN
+
+
+def test_keeps_preferred_category_when_no_meals_exist():
+    category = choose_available_category(CATEGORY_ZWISCHENVERSORGUNG, [[], []])
+
+    assert category == CATEGORY_ZWISCHENVERSORGUNG

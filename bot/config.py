@@ -50,7 +50,7 @@ class BotConfig:
     daily_message_enabled: bool = False
     daily_message_time: str = "10:30"
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.6-flash"
     dieter_trigger: str = "@DIETER"
 
 
@@ -97,7 +97,7 @@ def load_config(path: str) -> Config:
         daily_message_enabled=b.get("daily_message_enabled", False),
         daily_message_time=b.get("daily_message_time", "10:30"),
         gemini_api_key=b.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY"),
-        gemini_model=b.get("gemini_model", "gemini-2.0-flash"),
+        gemini_model=b.get("gemini_model", "gemini-3.6-flash"),
         dieter_trigger=b.get("dieter_trigger", "@DIETER"),
     )
 

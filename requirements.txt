@@ -1,4 +1,4 @@
-matrix-nio[e2e]>=0.25.0
+matrix-nio[e2e] @ https://github.com/WhyNotHugo/matrix-nio/archive/1eb65b6335edc176fad7df29446585efbff19c43.tar.gz
 aiohttp>=3.10.3,<4.0.0
 aiofiles>=23.2.1
 beautifulsoup4>=4.12.3
