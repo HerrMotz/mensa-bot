@@ -42,6 +42,24 @@ def test_tie_break_by_configured_order():
     assert "Philosophenweg" in result.tie_break_reason
 
 
+def test_tie_break_uses_weighted_ballot_order():
+    ballots = [["UHG", "Philosophenweg", "Ernst-Abbe-Platz"], ["Ernst-Abbe-Platz", "UHG", "Philosophenweg"]]
+    result = evaluate_approval(ballots, CANDIDATES)
+    # All have two approvals; weights are UHG=5, Philosophenweg=3, EAP=4.
+    assert result.winner == "UHG"
+    assert result.tie_break_used
+    assert "5 Punkte" in result.tie_break_reason
+    assert "konfigurierte Mensa-Reihenfolge" not in result.tie_break_reason
+
+
+def test_weighting_does_not_override_more_approvals():
+    result = evaluate_approval(
+        [["UHG", "Ernst-Abbe-Platz", "Philosophenweg"], ["Philosophenweg"]], CANDIDATES
+    )
+    assert result.winner == "Philosophenweg"
+    assert not result.tie_break_used
+
+
 def test_single_voter():
     ballots = [["Ernst-Abbe-Platz"]]
     result = evaluate_approval(ballots, CANDIDATES)

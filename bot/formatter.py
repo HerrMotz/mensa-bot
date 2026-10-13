@@ -134,6 +134,7 @@ def format_vote_start_message(
         if voting_method == "approval":
             lines.append("Gib alle akzeptablen Mensen an mit:")
             lines.append("`!mensa votieren 1,3` (Beispiel: Mensa 1 und Mensa 3 sind akzeptabel)")
+            lines.append("Die Reihenfolge entscheidet bei Gleichstand: erste Wahl N Punkte, zweite N−1 usw.; nicht genannte Mensen 0 Punkte.")
         else:
             lines.append("Gib deine Präferenz ein mit:")
             lines.append("`!mensa votieren 2,1,3` (Beispiel: Mensa 2 > Mensa 1 > Mensa 3)")
@@ -345,7 +346,8 @@ def format_help() -> str:
 `!mensa hilfe` – Zeigt diese Hilfemeldung
 
 _Kurzform `!m` funktioniert für alle Befehle, z. B. `!m start`, `!m votieren 1,2`._
-_Abstimmungsmethoden: Approval (Standard), Borda-Zählung, Instant-Runoff-Voting._"""
+_Abstimmungsmethoden: Approval (Standard), Borda-Zählung, Instant-Runoff-Voting._
+_Bei Approval entscheidet bei Gleichstand die Reihenfolge der Stimme: N, N−1, … Punkte (N = Anzahl Mensen), nicht genannte Mensen 0. Bei erneutem Gleichstand gilt die konfigurierte Mensa-Reihenfolge._"""
 
 
 # ── Poll event content builder ────────────────────────────────────────────────
