@@ -228,6 +228,35 @@ async def test_close_vote_no_ballots(vm):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_ballot", [False, True])
+async def test_auto_close_posts_final_result(vm, has_ballot):
+    delivered = asyncio.Event()
+
+    async def send(room_id, text):
+        await asyncio.sleep(0)  # Sending to Matrix suspends the task.
+        _sent_messages.append((room_id, text))
+        delivered.set()
+
+    vm._send_message = send
+    session_id, _, _, _ = await vm.create_vote("approval")
+    if has_ballot:
+        await vm.record_command_ballot(session_id, "@anna:matrix.org", "Anna", [2])
+    vm._close_task.cancel()
+    vm._close_task = asyncio.create_task(vm._auto_close(session_id, 0))
+    try:
+        await asyncio.wait_for(delivered.wait(), timeout=1)
+        assert not vm.has_active_vote()
+        assert len(_sent_messages) == 1
+        room_id, text = _sent_messages[0]
+        assert room_id == ROOM
+        assert MENSAS[1] in text if has_ballot else "keine Stimmen" in text
+    finally:
+        vm._close_task.cancel()
+        if vm._reminder_task:
+            vm._reminder_task.cancel()
+
+
+@pytest.mark.asyncio
 async def test_get_current_result_no_vote(vm):
     msg = await vm.get_current_result_message()
     assert "keine" in msg.lower()
