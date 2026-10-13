@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -19,6 +20,8 @@ class ParsedCommand:
     subcommand: str           # "mensa", "heute", "mittag", "zwischen", "abend", "start", "votieren", "ergebnis", "schliessen", "hilfe"
     raw_args: str             # everything after the subcommand
     ranking_indices: Optional[list[int]] = None  # parsed from "votieren" (ballot) subcommand
+    duration: Optional[timedelta] = None
+    duration_error: bool = False
 
 
 _SUBCOMMAND_ALIASES: dict[str, str] = {
@@ -35,6 +38,7 @@ _SUBCOMMAND_ALIASES: dict[str, str] = {
     "abstimmung": "start",
     "wahl": "start",
     "votieren": "votieren",     # cast a ballot
+    "v": "votieren",
     "ergebnis": "ergebnis",
     "result": "ergebnis",
     "schließen": "schliessen",
@@ -79,6 +83,24 @@ def parse_command(
         return ParsedCommand(subcommand="hilfe", raw_args="")
 
     cmd = ParsedCommand(subcommand=subcommand, raw_args=raw_args)
+
+    if subcommand in ("start", "votieren"):
+        duration_match = re.search(r"\[([^\]]*)\]", raw_args)
+        if duration_match:
+            try:
+                value = duration_match[1]
+                if not re.fullmatch(r"\d+:[0-5]\d:[0-5]\d", value):
+                    raise ValueError
+                hours, minutes, seconds = map(int, value.split(":"))
+                cmd.duration = timedelta(hours=hours, minutes=minutes, seconds=seconds)
+                if cmd.duration <= timedelta(0):
+                    raise ValueError
+            except (ValueError, OverflowError):
+                cmd.duration_error = True
+            raw_args = (raw_args[:duration_match.start()] + raw_args[duration_match.end():]).strip()
+            cmd.raw_args = raw_args
+        if "[" in raw_args or "]" in raw_args:
+            cmd.duration_error = True
 
     if subcommand == "votieren":
         cmd.ranking_indices = _parse_ranking(raw_args)

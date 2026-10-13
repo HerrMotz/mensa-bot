@@ -339,7 +339,9 @@ def format_help() -> str:
 `!mensa start approval` – Startet eine Approval-Abstimmung (markiere alle akzeptablen Mensen)
 `!mensa start borda` – Startet eine Abstimmung per Borda-Zählung
 `!mensa start irv` – Startet eine Abstimmung per Instant-Runoff-Voting
-`!mensa votieren 1,3` – Gibt eine Stimme ab (Bedeutung je nach Methode)
+`!mensa start [1:25:00]` – Startet eine Abstimmung für 1 Stunde, 25 Minuten (auch mit Methode, z. B. `start borda [0:20:00]`)
+`!mensa votieren 1,3` oder `!m v 1,3` – Gibt eine Stimme ab und startet bei Bedarf eine Abstimmung (Bedeutung je nach Methode)
+`!m v [1:25:00] 1,2,3` – Startet eine Abstimmung mit dieser Dauer oder setzt ihr Ende auf diese Dauer ab jetzt
 `!mensa ergebnis` – Zeigt das aktuelle Abstimmungsergebnis
 `!mensa schließen` – Schließt die aktuelle Abstimmung manuell
 `!mensa hilfe` – Zeigt diese Hilfemeldung

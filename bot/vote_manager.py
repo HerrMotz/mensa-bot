@@ -90,7 +90,7 @@ class VoteManager:
         return [list(p) for p in permutations(self._mensas)]
 
     async def create_vote(
-        self, voting_method: str = "approval"
+        self, voting_method: str = "approval", duration: Optional[timedelta] = None
     ) -> tuple[int, str, list[list[str]], datetime]:
         """Create a new vote session.
 
@@ -98,7 +98,7 @@ class VoteManager:
         voting_method must be 'borda', 'irv', or 'approval'.
         """
         now = datetime.now(timezone.utc)
-        closes_at = now + self._duration
+        closes_at = now + (duration if duration is not None else self._duration)
         poll_mode = self.get_poll_mode(voting_method)
         if poll_mode == "native":
             if voting_method == "approval":
@@ -127,6 +127,12 @@ class VoteManager:
 
     def set_poll_event_id(self, session_id: int, event_id: str) -> None:
         self._db.update_poll_event_id(session_id, event_id)
+
+    async def set_vote_duration(self, session_id: int, duration: timedelta) -> datetime:
+        closes_at = datetime.now(timezone.utc) + duration
+        self._db.update_vote_closes_at(session_id, closes_at.isoformat())
+        await self._schedule_auto_close(session_id, closes_at)
+        return closes_at
 
     async def record_native_ballot(
         self,

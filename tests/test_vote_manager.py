@@ -5,6 +5,9 @@ import json
 import os
 import tempfile
 import pytest
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from bot.database import Database
 from bot.vote_manager import VoteManager
@@ -275,3 +278,39 @@ async def test_restart_recovery(tmp_path):
     assert vm2.has_active_vote()
 
     db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["approval", "borda"])
+async def test_vote_command_starts_vote_and_reschedules_duration(vm, db, method):
+    from bot.config import BotConfig
+    from bot.main import MensaBot
+
+    bot = object.__new__(MensaBot)
+    bot._config = SimpleNamespace(bot=BotConfig(voting_method=method))
+    bot._vote_manager = vm
+    bot._mensa_names = MENSAS
+    bot._send = AsyncMock()
+    bot._matrix = SimpleNamespace(send_poll=AsyncMock(return_value="$poll"))
+
+    try:
+        await bot._handle_command(ROOM, "@anna:matrix.org", "!m v [1:25:00] 2,1,3", "Anna")
+        active = vm.get_active_vote()
+        assert datetime.fromisoformat(active["closes_at"]) - datetime.fromisoformat(active["started_at"]) == timedelta(hours=1, minutes=25)
+        assert json.loads(db.get_ballots(active["id"])[0]["ranking_json"]) == [MENSAS[1], MENSAS[0], MENSAS[2]]
+        old_task = vm._close_task
+        await bot._handle_command(ROOM, "@anna:matrix.org", "!m v [0:30:00] 1,2,3", "Anna")
+        updated = vm.get_active_vote()
+        assert updated["id"] == active["id"]
+        assert updated["closes_at"] < active["closes_at"]
+        assert vm._close_task is not old_task
+        assert len(db.get_ballots(active["id"])) == 1
+        closes_at = updated["closes_at"]
+        await bot._handle_command(ROOM, "@anna:matrix.org", "!m v [0:60:00] 2,1,3", "Anna")
+        assert vm.get_active_vote()["closes_at"] == closes_at
+        assert json.loads(db.get_ballots(active["id"])[0]["ranking_json"])[0] == MENSAS[0]
+    finally:
+        if vm._close_task:
+            vm._close_task.cancel()
+        if vm._reminder_task:
+            vm._reminder_task.cancel()

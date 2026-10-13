@@ -210,6 +210,10 @@ class MensaBot:
         subcommand: str,
         cmd,  # ParsedCommand | None
     ) -> None:
+        if cmd and cmd.duration_error:
+            await self._send(room_id, "Bitte gib eine positive Dauer als `[H:MM:SS]` an, z. B. `[1:25:00]`.")
+            return
+
         if subcommand in ("mensa", "heute", "mittag", "zwischen", "abend"):
             forced = {
                 "heute": CATEGORY_MITTAGESSEN,
@@ -222,11 +226,11 @@ class MensaBot:
         elif subcommand == "start":
             raw_args = cmd.raw_args.strip().lower() if cmd else ""
             method = raw_args if raw_args in ("borda", "irv", "approval") else self._config.bot.voting_method
-            await self._cmd_start_vote(room_id, voting_method=method)
+            await self._cmd_start_vote(room_id, voting_method=method, duration=cmd.duration if cmd else None)
 
         elif subcommand == "votieren":
             ranking = cmd.ranking_indices if cmd else None
-            await self._cmd_cast_ballot(room_id, sender, display_name, ranking)
+            await self._cmd_cast_ballot(room_id, sender, display_name, ranking, cmd.duration if cmd else None)
 
         elif subcommand == "ergebnis":
             msg = await self._vote_manager.get_current_result_message()
@@ -329,7 +333,9 @@ class MensaBot:
         self._db.save_meals(cache_id, meals)
         return meals, None
 
-    async def _cmd_start_vote(self, room_id: str, voting_method: str = "borda") -> None:
+    async def _cmd_start_vote(
+        self, room_id: str, voting_method: str = "borda", duration: Optional[timedelta] = None
+    ) -> None:
         if self._vote_manager.has_active_vote():
             active = self._vote_manager.get_active_vote()
             closes_at = datetime.fromisoformat(active["closes_at"])
@@ -337,7 +343,7 @@ class MensaBot:
             return
 
         session_id, poll_mode, options, closes_at = await self._vote_manager.create_vote(
-            voting_method=voting_method
+            voting_method=voting_method, duration=duration
         )
 
         # Post the announcement.
@@ -373,25 +379,22 @@ class MensaBot:
         sender: str,
         display_name: Optional[str],
         ranking_indices: Optional[list[int]],
+        duration: Optional[timedelta] = None,
     ) -> None:
         active = self._vote_manager.get_active_vote()
         if not active:
-            await self._send(room_id, format_no_active_vote())
-            return
-
-        if active["poll_mode"] == "native":
-            await self._send(
-                room_id,
-                "Bitte stimme über den oben angezeigten Poll ab, nicht per Befehl.",
-            )
-            return
+            await self._cmd_start_vote(room_id, self._config.bot.voting_method, duration)
+            active = self._vote_manager.get_active_vote()
+        elif duration is not None:
+            closes_at = await self._vote_manager.set_vote_duration(active["id"], duration)
+            await self._send(room_id, f"Die Abstimmung endet jetzt um **{closes_at.astimezone().strftime('%H:%M:%S Uhr')}**.")
 
         if not ranking_indices:
             n = len(self._mensa_names)
             numbered = "\n".join(f"{i+1}. {m}" for i, m in enumerate(self._mensa_names))
             await self._send(
                 room_id,
-                f"Bitte gib deine Reihenfolge an. Beispiel: `!mensa wahl 2,1,3`\n\nMensen:\n{numbered}",
+                f"Bitte gib deine Stimme an. Beispiel: `!mensa votieren 2,1,3`\n\nMensen:\n{numbered}",
             )
             return
 
