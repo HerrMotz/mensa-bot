@@ -282,7 +282,7 @@ class VoteManager:
 
     async def close_vote(self, session_id: int) -> str:
         """Evaluate and close a vote. Returns the result message."""
-        if self._close_task and not self._close_task.done():
+        if self._close_task and self._close_task is not asyncio.current_task() and not self._close_task.done():
             self._close_task.cancel()
         if self._reminder_task and not self._reminder_task.done():
             self._reminder_task.cancel()
