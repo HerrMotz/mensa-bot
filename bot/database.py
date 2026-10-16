@@ -236,6 +236,13 @@ class Database:
                 (now, winner, result_json, session_id),
             )
 
+    def update_vote_closes_at(self, session_id: int, closes_at: str) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE vote_sessions SET closes_at=? WHERE id=? AND status='open'",
+                (closes_at, session_id),
+            )
+
     def update_poll_event_id(self, session_id: int, event_id: str) -> None:
         with self._tx() as conn:
             conn.execute(

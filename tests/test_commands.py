@@ -2,6 +2,7 @@
 
 import pytest
 from bot.commands import parse_command, ParsedCommand
+from datetime import timedelta
 
 
 def test_bare_command():
@@ -51,6 +52,25 @@ def test_votieren_spaces_in_indices():
 def test_votieren_invalid_indices():
     cmd = parse_command("!mensa votieren abc")
     assert cmd.ranking_indices is None
+
+
+@pytest.mark.parametrize("text,subcommand,args", [
+    ("!m v [1:25:00] 1,2,3", "votieren", "1,2,3"),
+    ("!m start borda [1:25:00]", "start", "borda"),
+])
+def test_vote_duration_keeps_other_arguments(text, subcommand, args):
+    cmd = parse_command(text, ["!mensa", "!m"])
+    assert cmd.subcommand == subcommand
+    assert cmd.raw_args == args
+    assert cmd.duration == timedelta(hours=1, minutes=25)
+    if subcommand == "votieren":
+        assert cmd.ranking_indices == [1, 2, 3]
+
+
+@pytest.mark.parametrize("duration", ["[0:00:00]", "[0:60:00]", "[abc]", "[1:25:00"])
+def test_invalid_vote_duration(duration):
+    cmd = parse_command(f"!mensa votieren {duration} 1,2")
+    assert cmd.duration_error
 
 
 def test_ergebnis():
