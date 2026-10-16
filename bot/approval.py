@@ -4,7 +4,8 @@ Each voter marks every candidate they find acceptable (any non-empty subset).
 The candidate with the most approvals wins.
 
 Tie-breaking order:
-  1. Configured Mensa order (lower index wins).
+  1. Weighted ballot order (N points for first, N-1 for second, etc.).
+  2. Configured Mensa order (lower index wins).
 A tie-break explanation is always included in the result when used.
 """
 
@@ -37,10 +38,12 @@ def evaluate_approval(
         raise ValueError("Keine Kandidaten vorhanden.")
 
     counts: dict[str, int] = {c: 0 for c in candidates}
+    weights: dict[str, int] = {c: 0 for c in candidates}
     for ballot in ballots:
-        for approved in ballot:
+        for pos, approved in enumerate(ballot):
             if approved in counts:
                 counts[approved] += 1
+                weights[approved] += len(candidates) - pos
 
     max_count = max(counts.values())
     leaders = [c for c, n in counts.items() if n == max_count]
@@ -51,11 +54,16 @@ def evaluate_approval(
     if len(leaders) == 1:
         winner = leaders[0]
     else:
-        winner = min(leaders, key=lambda c: candidates.index(c))
+        max_weight = max(weights[c] for c in leaders)
+        weighted_leaders = [c for c in leaders if weights[c] == max_weight]
+        winner = min(weighted_leaders, key=lambda c: candidates.index(c))
         tie_break_reason = (
-            f"Gleichstand aufgelöst nach konfigurierter Mensa-Reihenfolge "
-            f"(Gewinner: {winner})"
+            f"Gewichtete Reihenfolge: {len(candidates)} Punkte für die erste Wahl, "
+            f"danach je 1 Punkt weniger; nicht genannte Mensen: 0 Punkte "
+            f"(Gewinner: {winner}, {max_weight} Punkte)"
         )
+        if len(weighted_leaders) > 1:
+            tie_break_reason += "; weiterhin Gleichstand, konfigurierte Mensa-Reihenfolge entscheidet"
         tie_break_used = True
 
     return ApprovalResult(

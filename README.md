@@ -152,7 +152,7 @@ Jede Person markiert alle Mensen, die sie für akzeptabel hält — eine oder me
 
 **Kommandomodus (> 20 Mensen):** `!mensa wahl 1,3` bedeutet „Mensa 1 und Mensa 3 sind für mich akzeptabel."
 
-**Gleichstandsauflösung:** Konfigurierte Mensa-Reihenfolge (erste gewinnt). Gleichstände werden immer ausgewiesen.
+**Gleichstandsauflösung:** Die Reihenfolge der akzeptablen Mensen auf jedem Stimmzettel wird gewichtet: Bei N Mensen erhält die erste Wahl N Punkte, die zweite N−1 usw.; nicht genannte Mensen erhalten 0 Punkte. Unter den Mensen mit den meisten Zustimmungen gewinnt die mit der höchsten Gewichtssumme. Bei erneutem Gleichstand gilt die konfigurierte Mensa-Reihenfolge (erste gewinnt). Die verwendete Regel wird im Ergebnis erklärt.
 
 ### Borda-Zählung
 
